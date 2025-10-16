@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -5,7 +6,7 @@ const app = express();
 
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const PORT = process.env.PORT || 1234;
+const PORT = process.env.PORT ;
 
 let accessToken = null;
 let refreshToken = process.env.REFRESH_TOKEN;
@@ -43,10 +44,11 @@ const refreshAccessToken = async () => {
       }
       return accessToken;
     } else {
-      throw new Error('Failed to refresh token');
+      console.error('Spotify API Error Response:', data);
+      throw new Error(`Failed to refresh token: ${data.error} - ${data.error_description || 'No description'}`);
     }
   } catch (error) {
-    console.error('Error refreshing token:', error);
+    console.error('Error refreshing token:', error.message);
     throw error;
   }
 };
