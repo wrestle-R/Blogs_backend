@@ -6,9 +6,14 @@ let tokenCache = {
   tokenExpiresAt: null
 };
 
+// Hardcoded Spotify API credentials
+const CLIENT_ID = 'a1ef78fef1584de88d6a0274aca40003';
+const CLIENT_SECRET = 'dc9b0088d0bd491abb8dfd6ddfda9180';
+const REFRESH_TOKEN = 'AQC11rEwSxok54PSJjK7jj0BEe0lvCC_cNDgUApfsK7JTJynT0iBUp37-iHCfVsQwvhwabki94PUBFXQKHMUVbK8SlhuhI5kzsxyhhSCu-VsFQBM3goIxbaWCKY0HuXScu8';
+
 // Helper function to refresh access token
-async function refreshAccessToken(env) {
-  const authString = btoa(`${env.CLIENT_ID}:${env.CLIENT_SECRET}`);
+async function refreshAccessToken() {
+  const authString = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`);
   
   const authOptions = {
     method: 'POST',
@@ -18,7 +23,7 @@ async function refreshAccessToken(env) {
     },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
-      refresh_token: env.REFRESH_TOKEN
+      refresh_token: REFRESH_TOKEN
     })
   };
 
@@ -40,9 +45,9 @@ async function refreshAccessToken(env) {
 }
 
 // Helper function to get valid access token
-async function getValidAccessToken(env) {
+async function getValidAccessToken() {
   if (!tokenCache.accessToken || (tokenCache.tokenExpiresAt && Date.now() >= tokenCache.tokenExpiresAt - 60000)) {
-    await refreshAccessToken(env);
+    await refreshAccessToken();
   }
   return tokenCache.accessToken;
 }
