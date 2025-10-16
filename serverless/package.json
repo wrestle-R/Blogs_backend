@@ -1,0 +1,21 @@
+{
+  "name": "spotify-cloudflare-worker",
+  "version": "1.0.0",
+  "description": "Spotify integration as Cloudflare Worker",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "spotify",
+    "serverless"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.78.0"
+  }
+}

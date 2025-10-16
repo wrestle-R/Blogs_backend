@@ -1,0 +1,15 @@
+name = "spotify-worker"
+main = "index.js"
+compatibility_date = "2025-10-16"
+
+# Environment variables
+# Add your secrets using: wrangler secret put <KEY>
+# wrangler secret put CLIENT_ID
+# wrangler secret put CLIENT_SECRET
+# wrangler secret put REFRESH_TOKEN
+
+# Or use this for development
+[vars]
+# CLIENT_ID = "your-client-id"
+# CLIENT_SECRET = "your-client-secret"
+# REFRESH_TOKEN = "your-refresh-token"
