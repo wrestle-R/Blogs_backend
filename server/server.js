@@ -137,6 +137,44 @@ app.get('/api/recent-tracks', async (req, res) => {
   }
 });
 
+app.get('/api/last-played', async (req, res) => {
+  try {
+    const token = await getValidAccessToken();
+
+    const response = await fetch('https://api.spotify.com/v1/me/player/recently-played?limit=1', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Spotify API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.items || data.items.length === 0) {
+      return res.json({ message: 'No recently played tracks found' });
+    }
+
+    const lastPlayed = data.items[0];
+    const song = {
+      name: lastPlayed.track.name,
+      artist: lastPlayed.track.artists.map(artist => artist.name).join(', '),
+      album: lastPlayed.track.album.name,
+      albumArt: lastPlayed.track.album.images[0]?.url || null,
+      songUrl: lastPlayed.track.external_urls.spotify,
+      playedAt: lastPlayed.played_at,
+      playedAtTimestamp: new Date(lastPlayed.played_at).getTime()
+    };
+
+    res.json(song);
+  } catch (error) {
+    console.error('Error fetching last played song:', error);
+    res.status(500).json({ error: 'Failed to fetch last played song', message: error.message });
+  }
+});
+
 app.get('/api/top-tracks', async (req, res) => {
   try {
     const token = await getValidAccessToken();
@@ -309,6 +347,7 @@ app.get('/', (req, res) => {
             <strong>Available Endpoints:</strong><br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
             <code>GET /api/recent-tracks</code> - Get recently played tracks<br>
+            <code>GET /api/last-played</code> - Get last played song with timestamp<br>
             <code>GET /api/top-tracks</code> - Get top 10 tracks<br>
             <code>GET /api/top-artists</code> - Get top 10 artists<br>
             <code>GET /api/playlists</code> - Get user playlists<br>
@@ -325,6 +364,7 @@ app.listen(PORT, () => {
   console.log(`\nAvailable endpoints:`);
   console.log(`  - http://localhost:${PORT}/api/now-playing (Get currently playing song)`);
   console.log(`  - http://localhost:${PORT}/api/recent-tracks (Get recently played tracks)`);
+  console.log(`  - http://localhost:${PORT}/api/last-played (Get last played song with timestamp)`);
   console.log(`  - http://localhost:${PORT}/api/top-tracks (Get top 10 tracks)`);
   console.log(`  - http://localhost:${PORT}/api/top-artists (Get top 10 artists)`);
   console.log(`  - http://localhost:${PORT}/api/playlists (Get user playlists)`);

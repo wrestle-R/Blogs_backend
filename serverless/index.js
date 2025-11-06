@@ -166,6 +166,44 @@ async function handleRecentTracks(env) {
   }
 }
 
+async function handleLastPlayed(env) {
+  try {
+    const token = await getValidAccessToken(env);
+
+    const response = await fetch('https://api.spotify.com/v1/me/player/recently-played?limit=1', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Spotify API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.items || data.items.length === 0) {
+      return jsonResponse({ message: 'No recently played tracks found' });
+    }
+
+    const lastPlayed = data.items[0];
+    const song = {
+      name: lastPlayed.track.name,
+      artist: lastPlayed.track.artists.map(artist => artist.name).join(', '),
+      album: lastPlayed.track.album.name,
+      albumArt: lastPlayed.track.album.images[0]?.url || null,
+      songUrl: lastPlayed.track.external_urls.spotify,
+      playedAt: lastPlayed.played_at,
+      playedAtTimestamp: new Date(lastPlayed.played_at).getTime()
+    };
+
+    return jsonResponse(song);
+  } catch (error) {
+    console.error('Error fetching last played song:', error);
+    return jsonResponse({ error: 'Failed to fetch last played song', message: error.message }, 500);
+  }
+}
+
 async function handleTopTracks(env, url) {
   try {
     const token = await getValidAccessToken(env);
@@ -340,6 +378,7 @@ function handleHome() {
             <strong>Available Endpoints:</strong><br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
             <code>GET /api/recent-tracks</code> - Get recently played tracks<br>
+            <code>GET /api/last-played</code> - Get last played song with timestamp<br>
             <code>GET /api/top-tracks</code> - Get top 10 tracks<br>
             <code>GET /api/top-artists</code> - Get top 10 artists<br>
             <code>GET /api/playlists</code> - Get user playlists<br>
@@ -370,6 +409,8 @@ export default {
       return handleNowPlaying(env);
     } else if (path === '/api/recent-tracks') {
       return handleRecentTracks(env);
+    } else if (path === '/api/last-played') {
+      return handleLastPlayed(env);
     } else if (path === '/api/top-tracks') {
       return handleTopTracks(env, request.url);
     } else if (path === '/api/top-artists') {
