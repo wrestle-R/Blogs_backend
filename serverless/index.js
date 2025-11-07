@@ -547,6 +547,72 @@ async function handlePlaylists(env) {
   }
 }
 
+async function handleGetPlaylistTracks(env, url) {
+  try {
+    const urlParams = new URL(url).searchParams;
+    const playlistId = urlParams.get('id') || env.PLAYLIST_ID || '5iw7Tk89Q0p9a5waGqJFLG';
+    const limit = urlParams.get('limit') || '50';
+    const offset = urlParams.get('offset') || '0';
+
+    // Get client credentials token (public endpoint)
+    const token = await getClientCredentialsToken(env);
+
+    // Fetch playlist tracks
+    const response = await fetch(
+      `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=${limit}&offset=${offset}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      }
+    );
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return jsonResponse({ error: 'Playlist not found' }, 404);
+      }
+      throw new Error(`Spotify API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    // Map tracks to a clean format
+    const tracks = data.items
+      .filter(item => item.track) // Filter out null tracks
+      .map(item => ({
+        id: item.track.id,
+        name: item.track.name,
+        artist: item.track.artists.map(artist => artist.name).join(', '),
+        artistIds: item.track.artists.map(artist => artist.id),
+        album: item.track.album.name,
+        albumId: item.track.album.id,
+        albumArt: item.track.album.images[0]?.url || null,
+        duration: item.track.duration_ms,
+        url: item.track.external_urls.spotify,
+        uri: item.track.uri,
+        previewUrl: item.track.preview_url,
+        addedAt: item.added_at,
+        addedBy: item.added_by?.id || null,
+        isLocal: item.is_local,
+        popularity: item.track.popularity,
+        explicit: item.track.explicit
+      }));
+
+    return jsonResponse({
+      playlistId,
+      tracks,
+      total: data.total,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      next: data.next,
+      previous: data.previous
+    });
+  } catch (error) {
+    console.error('Error fetching playlist tracks:', error);
+    return jsonResponse({ error: 'Failed to fetch playlist tracks', message: error.message }, 500);
+  }
+}
+
 async function handleAddTrack(env, request) {
   try {
     // Parse request body
@@ -697,6 +763,7 @@ function handleHome() {
             <strong>Available Endpoints:</strong><br>
             <code>GET /api/search?q=query</code> - Search for tracks (autocomplete)<br>
             <code>GET /api/getTrack?id=trackId</code> - Get full track details by ID<br>
+            <code>GET /api/playlist-tracks?id=playlistId</code> - Get all tracks from playlist<br>
             <code class="post">POST /api/addTrack</code> - Add track to playlist (body: {track_id})<br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
             <code>GET /api/recent-tracks</code> - Get recently played tracks<br>
@@ -731,6 +798,8 @@ export default {
       return handleSearch(env, request.url);
     } else if (path === '/api/getTrack') {
       return handleGetTrack(env, request.url);
+    } else if (path === '/api/playlist-tracks') {
+      return handleGetPlaylistTracks(env, request.url);
     } else if (path === '/api/addTrack' && request.method === 'POST') {
       return handleAddTrack(env, request);
     } else if (path === '/api/now-playing') {

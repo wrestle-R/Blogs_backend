@@ -497,6 +497,70 @@ app.get('/api/playlists', async (req, res) => {
   }
 });
 
+app.get('/api/playlist-tracks', async (req, res) => {
+  try {
+    const { id, limit = 50, offset = 0 } = req.query;
+    const playlistId = id || '5iw7Tk89Q0p9a5waGqJFLG'; // Default suggestions playlist
+
+    // Get client credentials token (public endpoint)
+    const token = await getClientCredentialsToken();
+
+    // Fetch playlist tracks
+    const response = await fetch(
+      `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=${limit}&offset=${offset}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      }
+    );
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return res.status(404).json({ error: 'Playlist not found' });
+      }
+      throw new Error(`Spotify API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    // Map tracks to a clean format
+    const tracks = data.items
+      .filter(item => item.track) // Filter out null tracks
+      .map(item => ({
+        id: item.track.id,
+        name: item.track.name,
+        artist: item.track.artists.map(artist => artist.name).join(', '),
+        artistIds: item.track.artists.map(artist => artist.id),
+        album: item.track.album.name,
+        albumId: item.track.album.id,
+        albumArt: item.track.album.images[0]?.url || null,
+        duration: item.track.duration_ms,
+        url: item.track.external_urls.spotify,
+        uri: item.track.uri,
+        previewUrl: item.track.preview_url,
+        addedAt: item.added_at,
+        addedBy: item.added_by?.id || null,
+        isLocal: item.is_local,
+        popularity: item.track.popularity,
+        explicit: item.track.explicit
+      }));
+
+    res.json({
+      playlistId,
+      tracks,
+      total: data.total,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      next: data.next,
+      previous: data.previous
+    });
+  } catch (error) {
+    console.error('Error fetching playlist tracks:', error);
+    res.status(500).json({ error: 'Failed to fetch playlist tracks', message: error.message });
+  }
+});
+
 app.post('/api/addTrack', async (req, res) => {
   try {
     const { track_id } = req.body;
@@ -639,6 +703,7 @@ app.get('/', (req, res) => {
             <strong>Available Endpoints:</strong><br>
             <code>GET /api/search?q=query</code> - Search for tracks (autocomplete)<br>
             <code>GET /api/getTrack?id=trackId</code> - Get full track details by ID<br>
+            <code>GET /api/playlist-tracks?id=playlistId</code> - Get all tracks from playlist<br>
             <code class="post">POST /api/addTrack</code> - Add track to playlist (body: {track_id})<br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
             <code>GET /api/recent-tracks</code> - Get recently played tracks<br>
@@ -659,6 +724,7 @@ app.listen(PORT, () => {
   console.log(`\nAvailable endpoints:`);
   console.log(`  - http://localhost:${PORT}/api/search?q=query (Search for tracks - autocomplete)`);
   console.log(`  - http://localhost:${PORT}/api/getTrack?id=trackId (Get full track details by ID)`);
+  console.log(`  - http://localhost:${PORT}/api/playlist-tracks?id=playlistId (Get all tracks from playlist)`);
   console.log(`  - http://localhost:${PORT}/api/addTrack [POST] (Add track to playlist - body: {track_id})`);
   console.log(`  - http://localhost:${PORT}/api/now-playing (Get currently playing song)`);
   console.log(`  - http://localhost:${PORT}/api/recent-tracks (Get recently played tracks)`);
