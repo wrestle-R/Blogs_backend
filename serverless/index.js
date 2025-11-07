@@ -6,10 +6,24 @@ let tokenCache = {
   tokenExpiresAt: null
 };
 
+// Client Credentials token cache for search
+let clientCredentialsCache = {
+  accessToken: null,
+  tokenExpiresAt: null
+};
+
+// Simple in-memory cache for search results
+const searchCache = new Map();
+const CACHE_TTL = 120000; // 120 seconds
+
+// Cache for track details (longer TTL)
+const trackCache = new Map();
+const TRACK_CACHE_TTL = 86400000; // 24 hours
+
 // Hardcoded Spotify API credentials
 const CLIENT_ID = 'a1ef78fef1584de88d6a0274aca40003';
 const CLIENT_SECRET = 'dc9b0088d0bd491abb8dfd6ddfda9180';
-const REFRESH_TOKEN = 'AQC11rEwSxok54PSJjK7jj0BEe0lvCC_cNDgUApfsK7JTJynT0iBUp37-iHCfVsQwvhwabki94PUBFXQKHMUVbK8SlhuhI5kzsxyhhSCu-VsFQBM3goIxbaWCKY0HuXScu8';
+const REFRESH_TOKEN = 'AQC8R58lQwUy2e2TdfQeiMYuBR0hCEDnMnMTseo5tuRVr8sUlgrxceuxm_1JO6Ntx5sYwp1EiQpOAmGU8YBnAAdovEUDiqYdaHzB3hBc48RgIPfrDbDgC7bX7hBzaYDZQTM';
 
 // Helper function to refresh access token
 async function refreshAccessToken() {
@@ -52,6 +66,42 @@ async function getValidAccessToken() {
   return tokenCache.accessToken;
 }
 
+// Get Client Credentials token for public API access (search)
+async function getClientCredentialsToken() {
+  if (clientCredentialsCache.accessToken && clientCredentialsCache.tokenExpiresAt && Date.now() < clientCredentialsCache.tokenExpiresAt - 60000) {
+    return clientCredentialsCache.accessToken;
+  }
+
+  const authString = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`);
+  
+  const authOptions = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': `Basic ${authString}`
+    },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials'
+    })
+  };
+
+  try {
+    const response = await fetch('https://accounts.spotify.com/api/token', authOptions);
+    const data = await response.json();
+
+    if (response.ok) {
+      clientCredentialsCache.accessToken = data.access_token;
+      clientCredentialsCache.tokenExpiresAt = Date.now() + (data.expires_in * 1000);
+      return clientCredentialsCache.accessToken;
+    } else {
+      throw new Error('Failed to get client credentials token');
+    }
+  } catch (error) {
+    console.error('Error getting client credentials token:', error);
+    throw error;
+  }
+}
+
 // CORS headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -90,6 +140,187 @@ function htmlResponse(html) {
 }
 
 // Route handlers
+async function handleSearch(env, url) {
+  try {
+    const urlParams = new URL(url).searchParams;
+    const q = urlParams.get('q');
+    const limit = urlParams.get('limit') || '6';
+    const market = urlParams.get('market');
+
+    // Validate query
+    if (!q || q.trim().length < 2) {
+      return jsonResponse({ 
+        error: 'Query parameter "q" is required and must be at least 2 characters' 
+      }, 400);
+    }
+
+    const trimmedQuery = q.trim();
+    const searchLimit = Math.min(Math.max(parseInt(limit) || 6, 1), 10);
+
+    // Create cache key
+    const cacheKey = `search:${trimmedQuery.toLowerCase()}:${searchLimit}:${market || 'none'}`;
+    
+    // Check cache
+    const cached = searchCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return jsonResponse(cached.data);
+    }
+
+    // Get client credentials token
+    const token = await getClientCredentialsToken();
+
+    // Build Spotify API URL
+    const params = new URLSearchParams({
+      q: trimmedQuery,
+      type: 'track',
+      limit: searchLimit.toString()
+    });
+    if (market) {
+      params.append('market', market);
+    }
+
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/search?${params.toString()}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!spotifyResponse.ok) {
+      throw new Error(`Spotify API error: ${spotifyResponse.status}`);
+    }
+
+    const data = await spotifyResponse.json();
+
+    // Map response to lightweight format
+    const suggestions = data.tracks.items.map(track => ({
+      id: track.id,
+      name: track.name,
+      artist: track.artists.map(artist => artist.name).join(', '),
+      album: track.album.name,
+      albumArt: track.album.images[0]?.url || null,
+      duration: track.duration_ms,
+      url: track.external_urls.spotify,
+      previewUrl: track.preview_url
+    }));
+
+    const response = {
+      suggestions,
+      count: suggestions.length,
+      query: trimmedQuery
+    };
+
+    // Cache the result
+    searchCache.set(cacheKey, {
+      data: response,
+      expiresAt: Date.now() + CACHE_TTL
+    });
+
+    // Clean old cache entries (simple cleanup)
+    if (searchCache.size > 100) {
+      const now = Date.now();
+      for (const [key, value] of searchCache.entries()) {
+        if (now >= value.expiresAt) {
+          searchCache.delete(key);
+        }
+      }
+    }
+
+    return jsonResponse(response);
+  } catch (error) {
+    console.error('Error searching tracks:', error);
+    return jsonResponse({ error: 'Failed to search tracks', message: error.message }, 500);
+  }
+}
+
+async function handleGetTrack(env, url) {
+  try {
+    const urlParams = new URL(url).searchParams;
+    const id = urlParams.get('id');
+    const force = urlParams.get('force');
+
+    // Validate track ID
+    if (!id || typeof id !== 'string' || id.trim().length === 0) {
+      return jsonResponse({ 
+        error: 'Query parameter "id" is required and must be a valid Spotify track ID' 
+      }, 400);
+    }
+
+    const trackId = id.trim();
+    const forceRefresh = force === 'true' || force === '1';
+
+    // Create cache key
+    const cacheKey = `track:${trackId}`;
+    
+    // Check cache (unless force refresh)
+    if (!forceRefresh) {
+      const cached = trackCache.get(cacheKey);
+      if (cached && Date.now() < cached.expiresAt) {
+        return jsonResponse(cached.data);
+      }
+    }
+
+    // Get client credentials token
+    const token = await getClientCredentialsToken();
+
+    // Call Spotify Get Track endpoint
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!spotifyResponse.ok) {
+      if (spotifyResponse.status === 404) {
+        return jsonResponse({ error: 'Track not found' }, 404);
+      }
+      throw new Error(`Spotify API error: ${spotifyResponse.status}`);
+    }
+
+    const track = await spotifyResponse.json();
+
+    // Map to minimal metadata format
+    const trackData = {
+      id: track.id,
+      name: track.name,
+      artist: track.artists.map(artist => artist.name).join(', '),
+      artistIds: track.artists.map(artist => artist.id),
+      album: track.album.name,
+      albumId: track.album.id,
+      albumArt: track.album.images[0]?.url || null,
+      duration: track.duration_ms,
+      url: track.external_urls.spotify,
+      uri: track.uri,
+      previewUrl: track.preview_url,
+      isrc: track.external_ids?.isrc || null,
+      releaseDate: track.album.release_date,
+      popularity: track.popularity,
+      explicit: track.explicit,
+      availableMarkets: track.available_markets?.length || 0
+    };
+
+    // Cache the result with 24h TTL
+    trackCache.set(cacheKey, {
+      data: trackData,
+      expiresAt: Date.now() + TRACK_CACHE_TTL
+    });
+
+    // Clean old cache entries (simple cleanup)
+    if (trackCache.size > 200) {
+      const now = Date.now();
+      for (const [key, value] of trackCache.entries()) {
+        if (now >= value.expiresAt) {
+          trackCache.delete(key);
+        }
+      }
+    }
+
+    return jsonResponse(trackData);
+  } catch (error) {
+    console.error('Error fetching track details:', error);
+    return jsonResponse({ error: 'Failed to fetch track details', message: error.message }, 500);
+  }
+}
+
 async function handleNowPlaying(env) {
   try {
     const token = await getValidAccessToken(env);
@@ -306,6 +537,77 @@ async function handlePlaylists(env) {
   }
 }
 
+async function handleAddTrack(env, request) {
+  try {
+    // Parse request body
+    const body = await request.json();
+    const { track_id } = body;
+
+    // Validate track_id
+    if (!track_id || typeof track_id !== 'string' || track_id.trim().length === 0) {
+      return jsonResponse({ 
+        error: 'track_id is required and must be a valid Spotify track ID' 
+      }, 400);
+    }
+
+    const trackId = track_id.trim();
+    const playlistId = '5iw7Tk89Q0p9a5waGqJFLG'; // Your specified playlist
+
+    // Get valid access token (with refresh if needed)
+    const token = await getValidAccessToken(env);
+
+    // Construct Spotify track URI
+    const trackUri = `spotify:track:${trackId}`;
+
+    // Add track to playlist
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        uris: [trackUri]
+      })
+    });
+
+    if (!spotifyResponse.ok) {
+      const errorData = await spotifyResponse.json();
+      
+      if (spotifyResponse.status === 404) {
+        return jsonResponse({ error: 'Playlist not found or track not found' }, 404);
+      }
+      if (spotifyResponse.status === 403) {
+        return jsonResponse({ error: 'Insufficient permissions to modify this playlist' }, 403);
+      }
+      
+      throw new Error(`Spotify API error: ${spotifyResponse.status} - ${errorData.error?.message || 'Unknown error'}`);
+    }
+
+    const data = await spotifyResponse.json();
+
+    // Return success response
+    return jsonResponse({
+      status: 'success',
+      playlist_id: playlistId,
+      snapshot_id: data.snapshot_id,
+      added_track: {
+        spotify_id: trackId,
+        spotify_url: `https://open.spotify.com/track/${trackId}`,
+        playlist_url: `https://open.spotify.com/playlist/${playlistId}`
+      },
+      message: 'Track successfully added to playlist'
+    });
+
+  } catch (error) {
+    console.error('Error adding track to playlist:', error);
+    return jsonResponse({ 
+      error: 'Failed to add track to playlist', 
+      message: error.message 
+    }, 500);
+  }
+}
+
 function handleStatus() {
   return jsonResponse({
     authenticated: !!tokenCache.accessToken,
@@ -365,6 +667,7 @@ function handleHome() {
           .endpoints code {
             color: #1DB954;
           }
+          .post { color: #ffa500; }
         </style>
       </head>
       <body>
@@ -376,6 +679,9 @@ function handleHome() {
           </div>
           <div class="endpoints">
             <strong>Available Endpoints:</strong><br>
+            <code>GET /api/search?q=query</code> - Search for tracks (autocomplete)<br>
+            <code>GET /api/getTrack?id=trackId</code> - Get full track details by ID<br>
+            <code class="post">POST /api/addTrack</code> - Add track to playlist (body: {track_id})<br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
             <code>GET /api/recent-tracks</code> - Get recently played tracks<br>
             <code>GET /api/last-played</code> - Get last played song with timestamp<br>
@@ -405,6 +711,12 @@ export default {
     // Route handling
     if (path === '/' || path === '') {
       return handleHome();
+    } else if (path === '/api/search') {
+      return handleSearch(env, request.url);
+    } else if (path === '/api/getTrack') {
+      return handleGetTrack(env, request.url);
+    } else if (path === '/api/addTrack' && request.method === 'POST') {
+      return handleAddTrack(env, request);
     } else if (path === '/api/now-playing') {
       return handleNowPlaying(env);
     } else if (path === '/api/recent-tracks') {

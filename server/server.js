@@ -12,6 +12,18 @@ let accessToken = null;
 let refreshToken = process.env.REFRESH_TOKEN;
 let tokenExpiresAt = null;
 
+// Client Credentials token for search (public endpoints)
+let clientCredentialsToken = null;
+let clientCredentialsExpiresAt = null;
+
+// Simple in-memory cache for search results
+const searchCache = new Map();
+const CACHE_TTL = 120000; // 120 seconds
+
+// Cache for track details (longer TTL)
+const trackCache = new Map();
+const TRACK_CACHE_TTL = 86400000; // 24 hours
+
 app.use(cors());
 app.use(express.json());
 
@@ -60,6 +72,216 @@ const getValidAccessToken = async () => {
 
   return accessToken;
 };
+
+// Get Client Credentials token for public API access (search)
+const getClientCredentialsToken = async () => {
+  if (clientCredentialsToken && clientCredentialsExpiresAt && Date.now() < clientCredentialsExpiresAt - 60000) {
+    return clientCredentialsToken;
+  }
+
+  const authOptions = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': 'Basic ' + Buffer.from(CLIENT_ID + ':' + CLIENT_SECRET).toString('base64')
+    },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials'
+    })
+  };
+
+  try {
+    const response = await fetch('https://accounts.spotify.com/api/token', authOptions);
+    const data = await response.json();
+
+    if (response.ok) {
+      clientCredentialsToken = data.access_token;
+      clientCredentialsExpiresAt = Date.now() + (data.expires_in * 1000);
+      return clientCredentialsToken;
+    } else {
+      throw new Error(`Failed to get client credentials token: ${data.error}`);
+    }
+  } catch (error) {
+    console.error('Error getting client credentials token:', error.message);
+    throw error;
+  }
+};
+
+app.get('/api/search', async (req, res) => {
+  try {
+    const { q, limit = 6, market } = req.query;
+
+    // Validate query
+    if (!q || q.trim().length < 2) {
+      return res.status(400).json({ 
+        error: 'Query parameter "q" is required and must be at least 2 characters' 
+      });
+    }
+
+    const trimmedQuery = q.trim();
+    const searchLimit = Math.min(Math.max(parseInt(limit) || 6, 1), 10);
+
+    // Create cache key
+    const cacheKey = `search:${trimmedQuery.toLowerCase()}:${searchLimit}:${market || 'none'}`;
+    
+    // Check cache
+    const cached = searchCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return res.json(cached.data);
+    }
+
+    // Get client credentials token
+    const token = await getClientCredentialsToken();
+
+    // Build Spotify API URL
+    const params = new URLSearchParams({
+      q: trimmedQuery,
+      type: 'track',
+      limit: searchLimit.toString()
+    });
+    if (market) {
+      params.append('market', market);
+    }
+
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/search?${params.toString()}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!spotifyResponse.ok) {
+      throw new Error(`Spotify API error: ${spotifyResponse.status}`);
+    }
+
+    const data = await spotifyResponse.json();
+
+    // Map response to lightweight format
+    const suggestions = data.tracks.items.map(track => ({
+      id: track.id,
+      name: track.name,
+      artist: track.artists.map(artist => artist.name).join(', '),
+      album: track.album.name,
+      albumArt: track.album.images[0]?.url || null,
+      duration: track.duration_ms,
+      url: track.external_urls.spotify,
+      previewUrl: track.preview_url
+    }));
+
+    const response = {
+      suggestions,
+      count: suggestions.length,
+      query: trimmedQuery
+    };
+
+    // Cache the result
+    searchCache.set(cacheKey, {
+      data: response,
+      expiresAt: Date.now() + CACHE_TTL
+    });
+
+    // Clean old cache entries (simple cleanup)
+    if (searchCache.size > 100) {
+      const now = Date.now();
+      for (const [key, value] of searchCache.entries()) {
+        if (now >= value.expiresAt) {
+          searchCache.delete(key);
+        }
+      }
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error searching tracks:', error);
+    res.status(500).json({ error: 'Failed to search tracks', message: error.message });
+  }
+});
+
+app.get('/api/getTrack', async (req, res) => {
+  try {
+    const { id, force } = req.query;
+
+    // Validate track ID
+    if (!id || typeof id !== 'string' || id.trim().length === 0) {
+      return res.status(400).json({ 
+        error: 'Query parameter "id" is required and must be a valid Spotify track ID' 
+      });
+    }
+
+    const trackId = id.trim();
+    const forceRefresh = force === 'true' || force === '1';
+
+    // Create cache key
+    const cacheKey = `track:${trackId}`;
+    
+    // Check cache (unless force refresh)
+    if (!forceRefresh) {
+      const cached = trackCache.get(cacheKey);
+      if (cached && Date.now() < cached.expiresAt) {
+        return res.json(cached.data);
+      }
+    }
+
+    // Get client credentials token
+    const token = await getClientCredentialsToken();
+
+    // Call Spotify Get Track endpoint
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!spotifyResponse.ok) {
+      if (spotifyResponse.status === 404) {
+        return res.status(404).json({ error: 'Track not found' });
+      }
+      throw new Error(`Spotify API error: ${spotifyResponse.status}`);
+    }
+
+    const track = await spotifyResponse.json();
+
+    // Map to minimal metadata format
+    const trackData = {
+      id: track.id,
+      name: track.name,
+      artist: track.artists.map(artist => artist.name).join(', '),
+      artistIds: track.artists.map(artist => artist.id),
+      album: track.album.name,
+      albumId: track.album.id,
+      albumArt: track.album.images[0]?.url || null,
+      duration: track.duration_ms,
+      url: track.external_urls.spotify,
+      uri: track.uri,
+      previewUrl: track.preview_url,
+      isrc: track.external_ids?.isrc || null,
+      releaseDate: track.album.release_date,
+      popularity: track.popularity,
+      explicit: track.explicit,
+      availableMarkets: track.available_markets?.length || 0
+    };
+
+    // Cache the result with 24h TTL
+    trackCache.set(cacheKey, {
+      data: trackData,
+      expiresAt: Date.now() + TRACK_CACHE_TTL
+    });
+
+    // Clean old cache entries (simple cleanup)
+    if (trackCache.size > 200) {
+      const now = Date.now();
+      for (const [key, value] of trackCache.entries()) {
+        if (now >= value.expiresAt) {
+          trackCache.delete(key);
+        }
+      }
+    }
+
+    res.json(trackData);
+  } catch (error) {
+    console.error('Error fetching track details:', error);
+    res.status(500).json({ error: 'Failed to fetch track details', message: error.message });
+  }
+});
 
 app.get('/api/now-playing', async (req, res) => {
   try {
@@ -275,6 +497,75 @@ app.get('/api/playlists', async (req, res) => {
   }
 });
 
+app.post('/api/addTrack', async (req, res) => {
+  try {
+    const { track_id } = req.body;
+
+    // Validate track_id
+    if (!track_id || typeof track_id !== 'string' || track_id.trim().length === 0) {
+      return res.status(400).json({ 
+        error: 'track_id is required and must be a valid Spotify track ID' 
+      });
+    }
+
+    const trackId = track_id.trim();
+    const playlistId = '5iw7Tk89Q0p9a5waGqJFLG'; // Your specified playlist
+
+    // Get valid access token (with refresh if needed)
+    const token = await getValidAccessToken();
+
+    // Construct Spotify track URI
+    const trackUri = `spotify:track:${trackId}`;
+
+    // Add track to playlist
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        uris: [trackUri]
+      })
+    });
+
+    if (!spotifyResponse.ok) {
+      const errorData = await spotifyResponse.json();
+      
+      if (spotifyResponse.status === 404) {
+        return res.status(404).json({ error: 'Playlist not found or track not found' });
+      }
+      if (spotifyResponse.status === 403) {
+        return res.status(403).json({ error: 'Insufficient permissions to modify this playlist' });
+      }
+      
+      throw new Error(`Spotify API error: ${spotifyResponse.status} - ${errorData.error?.message || 'Unknown error'}`);
+    }
+
+    const data = await spotifyResponse.json();
+
+    // Return success response
+    res.json({
+      status: 'success',
+      playlist_id: playlistId,
+      snapshot_id: data.snapshot_id,
+      added_track: {
+        spotify_id: trackId,
+        spotify_url: `https://open.spotify.com/track/${trackId}`,
+        playlist_url: `https://open.spotify.com/playlist/${playlistId}`
+      },
+      message: 'Track successfully added to playlist'
+    });
+
+  } catch (error) {
+    console.error('Error adding track to playlist:', error);
+    res.status(500).json({ 
+      error: 'Failed to add track to playlist', 
+      message: error.message 
+    });
+  }
+});
+
 app.get('/api/status', (req, res) => {
   res.json({
     authenticated: !!accessToken,
@@ -334,6 +625,7 @@ app.get('/', (req, res) => {
           .endpoints code {
             color: #1DB954;
           }
+          .post { color: #ffa500; }
         </style>
       </head>
       <body>
@@ -345,6 +637,9 @@ app.get('/', (req, res) => {
           </div>
           <div class="endpoints">
             <strong>Available Endpoints:</strong><br>
+            <code>GET /api/search?q=query</code> - Search for tracks (autocomplete)<br>
+            <code>GET /api/getTrack?id=trackId</code> - Get full track details by ID<br>
+            <code class="post">POST /api/addTrack</code> - Add track to playlist (body: {track_id})<br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
             <code>GET /api/recent-tracks</code> - Get recently played tracks<br>
             <code>GET /api/last-played</code> - Get last played song with timestamp<br>
@@ -362,6 +657,9 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`\nSpotify server is running on http://localhost:${PORT}`);
   console.log(`\nAvailable endpoints:`);
+  console.log(`  - http://localhost:${PORT}/api/search?q=query (Search for tracks - autocomplete)`);
+  console.log(`  - http://localhost:${PORT}/api/getTrack?id=trackId (Get full track details by ID)`);
+  console.log(`  - http://localhost:${PORT}/api/addTrack [POST] (Add track to playlist - body: {track_id})`);
   console.log(`  - http://localhost:${PORT}/api/now-playing (Get currently playing song)`);
   console.log(`  - http://localhost:${PORT}/api/recent-tracks (Get recently played tracks)`);
   console.log(`  - http://localhost:${PORT}/api/last-played (Get last played song with timestamp)`);
