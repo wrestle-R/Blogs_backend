@@ -20,13 +20,16 @@ const CACHE_TTL = 120000; // 120 seconds
 const trackCache = new Map();
 const TRACK_CACHE_TTL = 86400000; // 24 hours
 
-// Hardcoded Spotify API credentials
-const CLIENT_ID = 'a1ef78fef1584de88d6a0274aca40003';
-const CLIENT_SECRET = 'dc9b0088d0bd491abb8dfd6ddfda9180';
-const REFRESH_TOKEN = 'AQC8R58lQwUy2e2TdfQeiMYuBR0hCEDnMnMTseo5tuRVr8sUlgrxceuxm_1JO6Ntx5sYwp1EiQpOAmGU8YBnAAdovEUDiqYdaHzB3hBc48RgIPfrDbDgC7bX7hBzaYDZQTM';
-
 // Helper function to refresh access token
-async function refreshAccessToken() {
+async function refreshAccessToken(env) {
+  const CLIENT_ID = env.CLIENT_ID;
+  const CLIENT_SECRET = env.CLIENT_SECRET;
+  const REFRESH_TOKEN = env.REFRESH_TOKEN;
+
+  if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN) {
+    throw new Error('Missing required environment variables: CLIENT_ID, CLIENT_SECRET, or REFRESH_TOKEN');
+  }
+
   const authString = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`);
   
   const authOptions = {
@@ -59,17 +62,24 @@ async function refreshAccessToken() {
 }
 
 // Helper function to get valid access token
-async function getValidAccessToken() {
+async function getValidAccessToken(env) {
   if (!tokenCache.accessToken || (tokenCache.tokenExpiresAt && Date.now() >= tokenCache.tokenExpiresAt - 60000)) {
-    await refreshAccessToken();
+    await refreshAccessToken(env);
   }
   return tokenCache.accessToken;
 }
 
 // Get Client Credentials token for public API access (search)
-async function getClientCredentialsToken() {
+async function getClientCredentialsToken(env) {
   if (clientCredentialsCache.accessToken && clientCredentialsCache.tokenExpiresAt && Date.now() < clientCredentialsCache.tokenExpiresAt - 60000) {
     return clientCredentialsCache.accessToken;
+  }
+
+  const CLIENT_ID = env.CLIENT_ID;
+  const CLIENT_SECRET = env.CLIENT_SECRET;
+
+  if (!CLIENT_ID || !CLIENT_SECRET) {
+    throw new Error('Missing required environment variables: CLIENT_ID or CLIENT_SECRET');
   }
 
   const authString = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`);
@@ -167,7 +177,7 @@ async function handleSearch(env, url) {
     }
 
     // Get client credentials token
-    const token = await getClientCredentialsToken();
+    const token = await getClientCredentialsToken(env);
 
     // Build Spotify API URL
     const params = new URLSearchParams({
@@ -260,7 +270,7 @@ async function handleGetTrack(env, url) {
     }
 
     // Get client credentials token
-    const token = await getClientCredentialsToken();
+    const token = await getClientCredentialsToken(env);
 
     // Call Spotify Get Track endpoint
     const spotifyResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
@@ -551,7 +561,13 @@ async function handleAddTrack(env, request) {
     }
 
     const trackId = track_id.trim();
-    const playlistId = '5iw7Tk89Q0p9a5waGqJFLG'; // Your specified playlist
+    const playlistId = env.PLAYLIST_ID || '5iw7Tk89Q0p9a5waGqJFLG'; // Use env var or fallback
+
+    if (!playlistId) {
+      return jsonResponse({ 
+        error: 'PLAYLIST_ID environment variable is not configured' 
+      }, 500);
+    }
 
     // Get valid access token (with refresh if needed)
     const token = await getValidAccessToken(env);
