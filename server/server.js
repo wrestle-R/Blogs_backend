@@ -283,6 +283,50 @@ app.get('/api/getTrack', async (req, res) => {
   }
 });
 
+app.get('/api/preview/:id', async (req, res) => {
+  try {
+    const trackId = req.params.id?.trim();
+
+    // Validate track ID
+    if (!trackId || trackId.length === 0) {
+      return res.status(400).json({ 
+        error: 'Track ID is required in the URL path' 
+      });
+    }
+
+    // Get client credentials token
+    const token = await getClientCredentialsToken();
+
+    // Fetch track from Spotify API
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!spotifyResponse.ok) {
+      if (spotifyResponse.status === 404) {
+        return res.status(404).json({ error: 'Track not found' });
+      }
+      throw new Error(`Spotify API error: ${spotifyResponse.status}`);
+    }
+
+    const trackData = await spotifyResponse.json();
+
+    // Return only the preview URL
+    res.json({ 
+      preview_url: trackData.preview_url 
+    });
+
+  } catch (error) {
+    console.error('Error fetching preview URL:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch preview URL', 
+      message: error.message 
+    });
+  }
+});
+
 app.get('/api/now-playing', async (req, res) => {
   try {
     const token = await getValidAccessToken();
@@ -703,6 +747,7 @@ app.get('/', (req, res) => {
             <strong>Available Endpoints:</strong><br>
             <code>GET /api/search?q=query</code> - Search for tracks (autocomplete)<br>
             <code>GET /api/getTrack?id=trackId</code> - Get full track details by ID<br>
+            <code>GET /api/preview/:id</code> - Get preview URL for a track by ID<br>
             <code>GET /api/playlist-tracks?id=playlistId</code> - Get all tracks from playlist<br>
             <code class="post">POST /api/addTrack</code> - Add track to playlist (body: {track_id})<br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
@@ -724,6 +769,7 @@ app.listen(PORT, () => {
   console.log(`\nAvailable endpoints:`);
   console.log(`  - http://localhost:${PORT}/api/search?q=query (Search for tracks - autocomplete)`);
   console.log(`  - http://localhost:${PORT}/api/getTrack?id=trackId (Get full track details by ID)`);
+  console.log(`  - http://localhost:${PORT}/api/preview/:id (Get preview URL for a track by ID)`);
   console.log(`  - http://localhost:${PORT}/api/playlist-tracks?id=playlistId (Get all tracks from playlist)`);
   console.log(`  - http://localhost:${PORT}/api/addTrack [POST] (Add track to playlist - body: {track_id})`);
   console.log(`  - http://localhost:${PORT}/api/now-playing (Get currently playing song)`);

@@ -331,6 +331,50 @@ async function handleGetTrack(env, url) {
   }
 }
 
+async function handlePreview(env, trackId) {
+  try {
+    // Validate track ID
+    if (!trackId || trackId.trim().length === 0) {
+      return jsonResponse({ 
+        error: 'Track ID is required in the URL path' 
+      }, 400);
+    }
+
+    const cleanTrackId = trackId.trim();
+
+    // Get client credentials token
+    const token = await getClientCredentialsToken(env);
+
+    // Fetch track from Spotify API
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/tracks/${cleanTrackId}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!spotifyResponse.ok) {
+      if (spotifyResponse.status === 404) {
+        return jsonResponse({ error: 'Track not found' }, 404);
+      }
+      throw new Error(`Spotify API error: ${spotifyResponse.status}`);
+    }
+
+    const trackData = await spotifyResponse.json();
+
+    // Return only the preview URL
+    return jsonResponse({ 
+      preview_url: trackData.preview_url 
+    });
+
+  } catch (error) {
+    console.error('Error fetching preview URL:', error);
+    return jsonResponse({ 
+      error: 'Failed to fetch preview URL', 
+      message: error.message 
+    }, 500);
+  }
+}
+
 async function handleNowPlaying(env) {
   try {
     const token = await getValidAccessToken(env);
@@ -763,6 +807,7 @@ function handleHome() {
             <strong>Available Endpoints:</strong><br>
             <code>GET /api/search?q=query</code> - Search for tracks (autocomplete)<br>
             <code>GET /api/getTrack?id=trackId</code> - Get full track details by ID<br>
+            <code>GET /api/preview/:id</code> - Get preview URL for a track by ID<br>
             <code>GET /api/playlist-tracks?id=playlistId</code> - Get all tracks from playlist<br>
             <code class="post">POST /api/addTrack</code> - Add track to playlist (body: {track_id})<br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
@@ -798,6 +843,9 @@ export default {
       return handleSearch(env, request.url);
     } else if (path === '/api/getTrack') {
       return handleGetTrack(env, request.url);
+    } else if (path.startsWith('/api/preview/')) {
+      const trackId = path.replace('/api/preview/', '');
+      return handlePreview(env, trackId);
     } else if (path === '/api/playlist-tracks') {
       return handleGetPlaylistTracks(env, request.url);
     } else if (path === '/api/addTrack' && request.method === 'POST') {
