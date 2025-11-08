@@ -622,6 +622,26 @@ app.post('/api/addTrack', async (req, res) => {
     // Get valid access token (with refresh if needed)
     const token = await getValidAccessToken();
 
+    // Check if track already exists in playlist
+    const checkResponse = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (checkResponse.ok) {
+      const playlistData = await checkResponse.json();
+      const trackExists = playlistData.items.some(item => item.track && item.track.id === trackId);
+      
+      if (trackExists) {
+        return res.status(409).json({ 
+          error: 'Track already exists in playlist',
+          message: 'This track is already in the playlist',
+          track_id: trackId
+        });
+      }
+    }
+
     // Construct Spotify track URI
     const trackUri = `spotify:track:${trackId}`;
 
@@ -669,6 +689,75 @@ app.post('/api/addTrack', async (req, res) => {
     console.error('Error adding track to playlist:', error);
     res.status(500).json({ 
       error: 'Failed to add track to playlist', 
+      message: error.message 
+    });
+  }
+});
+
+app.delete('/api/removeTrack', async (req, res) => {
+  try {
+    const { track_id } = req.body;
+
+    // Validate track_id
+    if (!track_id || typeof track_id !== 'string' || track_id.trim().length === 0) {
+      return res.status(400).json({ 
+        error: 'track_id is required and must be a valid Spotify track ID' 
+      });
+    }
+
+    const trackId = track_id.trim();
+    const playlistId = '5iw7Tk89Q0p9a5waGqJFLG'; // Your specified playlist
+
+    // Get valid access token (with refresh if needed)
+    const token = await getValidAccessToken();
+
+    // Construct Spotify track URI
+    const trackUri = `spotify:track:${trackId}`;
+
+    // Remove track from playlist
+    const spotifyResponse = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        tracks: [{ uri: trackUri }]
+      })
+    });
+
+    if (!spotifyResponse.ok) {
+      const errorData = await spotifyResponse.json();
+      
+      if (spotifyResponse.status === 404) {
+        return res.status(404).json({ error: 'Playlist not found or track not found' });
+      }
+      if (spotifyResponse.status === 403) {
+        return res.status(403).json({ error: 'Insufficient permissions to modify this playlist' });
+      }
+      
+      throw new Error(`Spotify API error: ${spotifyResponse.status} - ${errorData.error?.message || 'Unknown error'}`);
+    }
+
+    const data = await spotifyResponse.json();
+
+    // Return success response
+    res.json({
+      status: 'success',
+      playlist_id: playlistId,
+      snapshot_id: data.snapshot_id,
+      removed_track: {
+        spotify_id: trackId,
+        spotify_url: `https://open.spotify.com/track/${trackId}`,
+        playlist_url: `https://open.spotify.com/playlist/${playlistId}`
+      },
+      message: 'Track successfully removed from playlist'
+    });
+
+  } catch (error) {
+    console.error('Error removing track from playlist:', error);
+    res.status(500).json({ 
+      error: 'Failed to remove track from playlist', 
       message: error.message 
     });
   }
@@ -750,6 +839,7 @@ app.get('/', (req, res) => {
             <code>GET /api/preview/:id</code> - Get preview URL for a track by ID<br>
             <code>GET /api/playlist-tracks?id=playlistId</code> - Get all tracks from playlist<br>
             <code class="post">POST /api/addTrack</code> - Add track to playlist (body: {track_id})<br>
+            <code class="post">DELETE /api/removeTrack</code> - Remove track from playlist (body: {track_id})<br>
             <code>GET /api/now-playing</code> - Get currently playing song<br>
             <code>GET /api/recent-tracks</code> - Get recently played tracks<br>
             <code>GET /api/last-played</code> - Get last played song with timestamp<br>
@@ -772,6 +862,7 @@ app.listen(PORT, () => {
   console.log(`  - http://localhost:${PORT}/api/preview/:id (Get preview URL for a track by ID)`);
   console.log(`  - http://localhost:${PORT}/api/playlist-tracks?id=playlistId (Get all tracks from playlist)`);
   console.log(`  - http://localhost:${PORT}/api/addTrack [POST] (Add track to playlist - body: {track_id})`);
+  console.log(`  - http://localhost:${PORT}/api/removeTrack [DELETE] (Remove track from playlist - body: {track_id})`);
   console.log(`  - http://localhost:${PORT}/api/now-playing (Get currently playing song)`);
   console.log(`  - http://localhost:${PORT}/api/recent-tracks (Get recently played tracks)`);
   console.log(`  - http://localhost:${PORT}/api/last-played (Get last played song with timestamp)`);
