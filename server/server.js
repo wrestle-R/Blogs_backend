@@ -846,12 +846,66 @@ app.get('/', (req, res) => {
             <code>GET /api/top-tracks</code> - Get top 10 tracks<br>
             <code>GET /api/top-artists</code> - Get top 10 artists<br>
             <code>GET /api/playlists</code> - Get user playlists<br>
-            <code>GET /api/status</code> - Check server status
+            <code>GET /api/status</code> - Check server status<br>
+            <code class="post">POST /api/newsletter/subscribe</code> - Subscribe to newsletter (body: {email, subscribedAt})
           </div>
         </div>
       </body>
     </html>
   `);
+});
+
+// Newsletter endpoint
+const validateEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+app.post('/api/newsletter/subscribe', async (req, res) => {
+  try {
+    const { email, subscribedAt } = req.body;
+
+    // Validate email
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!validateEmail(trimmedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email address'
+      });
+    }
+
+    // Store in in-memory database (for now)
+    // In production, this should be stored in a database
+    const subscriberData = {
+      email: trimmedEmail,
+      subscribedAt: subscribedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: 'active'
+    };
+
+    // Log the subscription
+    console.log(`Newsletter subscription: ${trimmedEmail} at ${subscriberData.subscribedAt}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Successfully subscribed',
+      email: trimmedEmail
+    });
+  } catch (error) {
+    console.error('Newsletter subscription error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error. Please try again later.'
+    });
+  }
 });
 
 app.listen(PORT, () => {
@@ -869,5 +923,6 @@ app.listen(PORT, () => {
   console.log(`  - http://localhost:${PORT}/api/top-tracks (Get top 10 tracks)`);
   console.log(`  - http://localhost:${PORT}/api/top-artists (Get top 10 artists)`);
   console.log(`  - http://localhost:${PORT}/api/playlists (Get user playlists)`);
-  console.log(`  - http://localhost:${PORT}/api/status (Check server status)\n`);
+  console.log(`  - http://localhost:${PORT}/api/status (Check server status)`);
+  console.log(`  - http://localhost:${PORT}/api/newsletter/subscribe [POST] (Subscribe to newsletter - body: {email, subscribedAt})\n`);
 });

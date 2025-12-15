@@ -838,6 +838,68 @@ function handleStatus() {
   });
 }
 
+// Email validation helper
+function validateEmail(email) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+// Newsletter subscribe handler
+async function handleNewsletterSubscribe(env, request) {
+  try {
+    const { email, subscribedAt } = await request.json();
+
+    // Validate email
+    if (!email || typeof email !== 'string') {
+      return jsonResponse({
+        success: false,
+        message: 'Email is required'
+      }, 400);
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!validateEmail(trimmedEmail)) {
+      return jsonResponse({
+        success: false,
+        message: 'Invalid email address'
+      }, 400);
+    }
+
+    // Store in Cloudflare KV
+    if (env.NEWSLETTER_STORE) {
+      const subscriberData = {
+        email: trimmedEmail,
+        subscribedAt: subscribedAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: 'active'
+      };
+
+      await env.NEWSLETTER_STORE.put(
+        trimmedEmail,
+        JSON.stringify(subscriberData),
+        { expirationTtl: 31536000 } // 1 year expiration
+      );
+
+      console.log(`Newsletter subscription: ${trimmedEmail} at ${subscriberData.subscribedAt}`);
+    } else {
+      console.warn('NEWSLETTER_STORE KV namespace not configured');
+    }
+
+    return jsonResponse({
+      success: true,
+      message: 'Successfully subscribed',
+      email: trimmedEmail
+    }, 200);
+  } catch (error) {
+    console.error('Newsletter subscription error:', error);
+    return jsonResponse({
+      success: false,
+      message: 'Server error. Please try again later.'
+    }, 500);
+  }
+}
+
 function handleHome() {
   const html = `
     <html>
@@ -914,7 +976,8 @@ function handleHome() {
             <code>GET /api/top-tracks</code> - Get top 10 tracks<br>
             <code>GET /api/top-artists</code> - Get top 10 artists<br>
             <code>GET /api/playlists</code> - Get user playlists<br>
-            <code>GET /api/status</code> - Check server status
+            <code>GET /api/status</code> - Check server status<br>
+            <code class="post">POST /api/newsletter/subscribe</code> - Subscribe to newsletter (body: {email, subscribedAt})
           </div>
         </div>
       </body>
@@ -964,6 +1027,8 @@ export default {
       return handlePlaylists(env);
     } else if (path === '/api/status') {
       return handleStatus();
+    } else if (path === '/api/newsletter/subscribe' && request.method === 'POST') {
+      return handleNewsletterSubscribe(env, request);
     } else {
       return jsonResponse({ error: 'Not Found' }, 404);
     }

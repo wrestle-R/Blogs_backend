@@ -4,3 +4,6 @@ dist/
 .dev.vars
 .env
 *.log
+wrangler.toml
+/wrangler.toml
+/.wrangler.toml
